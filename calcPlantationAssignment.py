@@ -1,9 +1,23 @@
 from typing import Dict, Tuple
 import argparse
 
+# Available recipes and their required crop ratios per bundle
+RECIPES = {
+    "minestrone": {
+        "Tomato": 3,
+        "Potato": 1,
+        "Carrot": 2,
+        "Onion": 2,
+    },
+    "salad": {
+        "Lettuce": 2,
+        "Tomato": 2,
+    },
+}
+
 def optimal_assignment(
     N: int,
-    ratio: Dict[str, float],
+    ratio: Dict[str, int],
 ) -> Dict[str, int]:
     """
     Compute the optimal integer assignment of N spots to crops to maximize the rate
@@ -84,14 +98,16 @@ if __name__ == "__main__":
         default=10,
         help="Number of plantations (spots). Defaults to 10 if not provided.",
     )
+    parser.add_argument(
+        "-r",
+        "--recipe",
+        choices=list(RECIPES.keys()),
+        default="minestrone",
+        help="Recipe to optimize for. Choices: %(choices)s. Defaults to %(default)s.",
+    )
     args = parser.parse_args()
     plantations = args.plantations
-    minestrone = {
-        "Tomato": 3,
-        "Potato": 1,
-        "Carrot": 2,
-        "Onion": 2,
-    }
+    selected_recipe = RECIPES[args.recipe]
 
-    plantation_assignment = optimal_assignment(plantations, minestrone)
-    print(f"N={plantations}: {plantation_assignment}")
+    plantation_assignment = optimal_assignment(plantations, selected_recipe)
+    print(f"recipe={args.recipe}, N={plantations}: {plantation_assignment}")
