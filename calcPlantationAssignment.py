@@ -226,20 +226,32 @@ if __name__ == "__main__":
     # Calculate the optimal assignment of plantations to crops
     plantation_assignment = optimal_assignment(optimal_plantations, selected_recipe)
     
-    print(f"recipe={args.recipe}, work_speed={work_speed}, suitability_level={suitability_level}, workers={num_workers}")
-    print(f"plantation_work_speed={plantation_work_speed:.1f}, optimal_plantations={optimal_plantations}")
+    print(f"Input: recipe={args.recipe}, work_speed={work_speed}, suitability_level={suitability_level}, workers={num_workers}")
+    print(f"Derived: plantation_work_speed={plantation_work_speed:.1f}, optimal_plantations={optimal_plantations}")
     print(f"Assignment: {plantation_assignment}")
     
-    # Show some statistics about worker efficiency
-    print("\nWorker efficiency analysis:")
+    # Calculate expected recipes per second
+    print("\nProduction analysis:")
     effective_plantation_work_speed = plantation_work_speed * num_workers
+    
+    # For each crop, calculate the production rate (crops per second)
+    crop_rates = {}
     for crop, count in plantation_assignment.items():
         work_per_cycle = 3 * CROP_DATA[crop]["work_per_phase"]
         work_time_per_plantation = work_per_cycle / effective_plantation_work_speed
-        total_work_time = work_time_per_plantation * count
         growth_time = CROP_DATA[crop]["growth_sec"]
         total_cycle_time = work_time_per_plantation + growth_time
-        utilization = (total_work_time / total_cycle_time) * 100
-        print(f"  {crop} ({count}x): work={work_time_per_plantation:.1f}s/plant, "
-              f"total_work={total_work_time:.1f}s, growth={growth_time}s, "
-              f"utilization={utilization:.1f}%")
+        
+        # Production rate: crops per second = gathered_amount_per_cycle * count / total_cycle_time
+        gathered_amount_per_cycle = 10 * (0.5 + (suitability_level) / 2)
+        crops_per_second = gathered_amount_per_cycle * count / total_cycle_time
+        crop_rates[crop] = crops_per_second
+        print(f"  {crop} ({count}x): {crops_per_second:.4f} crops/sec (cycle: {total_cycle_time:.1f}s)")
+    
+    # Calculate recipes per second (bottlenecked by the crop with lowest ratio coverage)
+    recipes_per_second = min(
+        crop_rates[crop] / selected_recipe[crop] 
+        for crop in plantation_assignment.keys()
+    )
+    
+    print(f"\nExpected recipes per minute: {recipes_per_second * 60:.2f}")
