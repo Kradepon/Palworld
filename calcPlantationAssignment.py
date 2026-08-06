@@ -21,23 +21,58 @@ RECIPES = {
 
 # Crop characteristics: work per phase and growth time
 CROP_DATA = {
-    "Berry": {"work_per_phase": 4500, "growth_sec": 180},
-    "Wheat": {"work_per_phase": 7500, "growth_sec": 270},
-    "Tomato": {"work_per_phase": 11000, "growth_sec": 300},
-    "Lettuce": {"work_per_phase": 15000, "growth_sec": 330},
-    "Potato": {"work_per_phase": 17000, "growth_sec": 350},
-    "Carrot": {"work_per_phase": 19000, "growth_sec": 370},
-    "Onion": {"work_per_phase": 21000, "growth_sec": 390},
+    "Berry": {"work_per_phase": 45, "growth_sec": 180},
+    "Wheat": {"work_per_phase": 75, "growth_sec": 270},
+    "Tomato": {"work_per_phase": 110, "growth_sec": 300},
+    "Lettuce": {"work_per_phase": 150, "growth_sec": 330},
+    "Potato": {"work_per_phase": 170, "growth_sec": 350},
+    "Carrot": {"work_per_phase": 190, "growth_sec": 370},
+    "Onion": {"work_per_phase": 210, "growth_sec": 390},
 }
 
 # Work speed base for each suitability level
 WORK_SPEED_SUITABILITY_BASES = {
-    1: 70,
-    2: 150,
-    3: 300,
-    4: 500,
-    5: 1000,
+    1: 50,
+    2: 70,
+    3: 100,
+    4: 140,
+    5: 190,
+    6: 260,
+    7: 370,
+    8: 510,
+    9: 720,
+    10: 1000,
 }
+
+def work_time(crop: str, effective_work_speed: float) -> float:
+    """
+    Seconds of work per plantation cycle: planting + watering + gathering.
+
+    A work speed of 100 clears one unit of workload per second, so the speed has
+    to be scaled down by 100 before dividing the workload by it.
+    """
+    return 3 * CROP_DATA[crop]["work_per_phase"] / (effective_work_speed / 100)
+
+
+def cycle_time(crop: str, effective_work_speed: float) -> float:
+    """Seconds for one plantation to run planting -> watering -> growth -> gathering."""
+    return CROP_DATA[crop]["growth_sec"] + work_time(crop, effective_work_speed)
+
+
+def crop_shares(ratio: Dict[str, int], effective_work_speed: float) -> Dict[str, float]:
+    """
+    Fraction of the spots each crop needs in order to hold the recipe ratio.
+
+    A plantation yields one harvest per cycle_time and every crop harvests the
+    same amount, so a crop needs spots proportional to ratio * cycle_time. Using
+    growth_sec alone would under-serve the slow-to-work crops, since work time is
+    a large part of the cycle at low suitability levels.
+    """
+    active = [c for c, r in ratio.items() if r > 0]
+    weights = {c: ratio[c] * cycle_time(c, effective_work_speed) for c in active}
+    total = sum(weights.values())
+    return {c: w / total for c, w in weights.items()}
+
 
 def calculate_optimal_plantations(
     work_speed: float,
@@ -50,7 +85,7 @@ def calculate_optimal_plantations(
     suitability level, and number of workers to minimize worker downtime.
     
     The plantation work speed is calculated as:
-    - multiplier = work_speed / 70 (base work speed)
+    - multiplier = work_speed / 100 (base work speed)
     - plantation_work_speed = WORK_SPEED_SUITABILITY_BASES[suitability_level] * multiplier
     
     For each crop, the total cycle time consists of:
@@ -65,8 +100,8 @@ def calculate_optimal_plantations(
     Each crop in the recipe must have at least one plantation.
     
     Args:
-        work_speed: base work speed value (default base is 70)
-        suitability_level: worker suitability level (1-5)
+        work_speed: base work speed value (default base is 100)
+        suitability_level: worker suitability level (1-10)
         num_workers: number of workers working concurrently
         ratio: mapping crop -> required amount per bundle
         
@@ -81,7 +116,7 @@ def calculate_optimal_plantations(
         raise ValueError("num_workers must be at least 1")
     
     # Calculate plantation work speed based on suitability level
-    multiplier = work_speed / 70  # 70 is the base work speed
+    multiplier = work_speed / 100  # 100 is the base work speed
     plantation_work_speed = WORK_SPEED_SUITABILITY_BASES[suitability_level] * multiplier
     
     # Find active crops (those needed in the recipe)
@@ -92,42 +127,42 @@ def calculate_optimal_plantations(
     # Minimum plantations = number of crops in recipe (at least 1 per crop)
     min_plantations = len(active)
     
-    # Calculate weighted average cycle characteristics
-    total_ratio = sum(ratio[c] for c in active)
-    
     # Effective work speed is multiplied by number of workers
     effective_plantation_work_speed = plantation_work_speed * num_workers
-    
-    # For each crop, calculate the optimal plantations
-    optimal_counts = []
-    for crop in active:
-        work_per_cycle = 3 * CROP_DATA[crop]["work_per_phase"]  # planting + watering + gathering
-        work_time = work_per_cycle / effective_plantation_work_speed  # time to complete all work phases with multiple workers
-        growth_time = CROP_DATA[crop]["growth_sec"]  # time for growth (no work)
-        total_cycle_time = work_time + growth_time
-        
-        # Optimal plantations: enough so that work_time * N ≈ total_cycle_time
-        # This means while working on N plantations, the first one completes its cycle
-        # Optimal N = total_cycle_time / work_time = (work_time + growth_time) / work_time
-        optimal_n = total_cycle_time / work_time
-        optimal_counts.append(optimal_n * ratio[crop] / total_ratio)
-    
-    # Take weighted average and round to nearest integer
+
+    # Split the spots by the same shares optimal_assignment() will use, so the
+    # count and the split agree on what the plantation mix looks like.
+    shares = crop_shares(ratio, effective_plantation_work_speed)
+
+    # One plantation of crop i occupies the workers for work_time_i out of every
+    # cycle_time_i seconds, i.e. it claims that fraction of the pool. Spots fill
+    # the pool by summing those fractions, so the saturating count solves
+    #   N * sum(share_i * work_time_i / cycle_time_i) = 1
+    # Averaging the per-crop counts instead would overshoot, because a crop that
+    # alone supports many plantations does not raise the count for the others.
+    load_per_spot = sum(
+        shares[crop]
+        * work_time(crop, effective_plantation_work_speed)
+        / cycle_time(crop, effective_plantation_work_speed)
+        for crop in active
+    )
+
     # Ensure minimum is at least the number of crops (1 per crop minimum)
-    avg_optimal = sum(optimal_counts)
-    return max(min_plantations, round(avg_optimal)), plantation_work_speed
+    return max(min_plantations, round(1 / load_per_spot)), plantation_work_speed
 
 def optimal_assignment(
     N: int,
     ratio: Dict[str, int],
+    effective_work_speed: float,
 ) -> Dict[str, int]:
     """
     Compute the optimal integer assignment of N spots to crops to maximize the rate
     of producing bundles in the given ratio, given per-crop production times.
 
     Args:
-        N: total number of spots (integer >= 1)
+        N: total number of spots (must be at least one per required crop)
         ratio: mapping crop -> required amount per bundle (>= 0)
+        effective_work_speed: plantation work speed times the number of workers
 
     Returns:
         A mapping crop -> assigned number of spots (integers summing to N).
@@ -151,26 +186,37 @@ def optimal_assignment(
     if not active:
         return {}
 
-    # Weights are r_i * t_i
-    weights = {c: ratio[c] * CROP_DATA[c]["growth_sec"] for c in active}
-    S = sum(weights.values())
+    if N < len(active):
+        raise ValueError(f"N must be >= {len(active)} to give every required crop a spot")
 
-    # Ideal real-valued quotas: x_i = N * (w_i / S)
-    quotas = {c: N * (weights[c] / S) for c in active}
+    # Shares are r_i * t_i normalised, matching calculate_optimal_plantations()
+    shares = crop_shares(ratio, effective_work_speed)
+
+    # Ideal real-valued quotas: x_i = N * share_i
+    quotas = {c: N * shares[c] for c in active}
     base = {c: int(quotas[c]) for c in active}
     assigned = sum(base.values())
     R = N - assigned
 
     # Distribute remaining spots to crops with largest fractional remainders
-    # Tie-breaker: larger weight first, then alphabetical for determinism
+    # Tie-breaker: larger share first, then alphabetical for determinism
     fracs = sorted(
-        ((quotas[c] - base[c], weights[c], c) for c in active),
+        ((quotas[c] - base[c], shares[c], c) for c in active),
         key=lambda x: (x[0], x[1], -ord(x[2][0]) if x[2] else 0),
         reverse=True,
     )
     for i in range(R):
         _, _, crop = fracs[i]
         base[crop] += 1
+
+    # A crop rounded down to zero would silently drop out of the recipe, leaving
+    # the rest unable to ever form a bundle. Lift it back to one spot, taking
+    # from whichever crop sits furthest above its quota.
+    for crop in active:
+        if base[crop] == 0:
+            donor = max((c for c in active if base[c] > 1), key=lambda c: base[c] - quotas[c])
+            base[donor] -= 1
+            base[crop] = 1
 
     # Build full result with crops in CROP_DATA order, omitting zero-valued crops
     result: Dict[str, int] = {}
@@ -187,8 +233,8 @@ if __name__ == "__main__":
         "work_speed",
         type=float,
         nargs="?",
-        default=70,
-        help="Base work speed value. Defaults to 70 if not provided.",
+        default=100,
+        help="Base work speed value. Defaults to 100 if not provided.",
     )
     parser.add_argument(
         "-s",
@@ -196,7 +242,7 @@ if __name__ == "__main__":
         type=int,
         choices=list(WORK_SPEED_SUITABILITY_BASES.keys()),
         default=1,
-        help="Worker suitability level (1-5). Defaults to 1.",
+        help="Worker suitability level (1-10). Defaults to 1.",
     )
     parser.add_argument(
         "-w",
@@ -223,31 +269,30 @@ if __name__ == "__main__":
         work_speed, suitability_level, num_workers, selected_recipe
     )
     
+    effective_plantation_work_speed = plantation_work_speed * num_workers
+
     # Calculate the optimal assignment of plantations to crops
-    plantation_assignment = optimal_assignment(optimal_plantations, selected_recipe)
-    
+    plantation_assignment = optimal_assignment(
+        optimal_plantations, selected_recipe, effective_plantation_work_speed
+    )
+
     print(f"Input: recipe={args.recipe}, work_speed={work_speed}, suitability_level={suitability_level}, workers={num_workers}")
     print(f"Derived: plantation_work_speed={plantation_work_speed:.1f}, optimal_plantations={optimal_plantations}")
     print(f"Assignment: {plantation_assignment}")
     
     # Calculate expected recipes per second
     print("\nProduction analysis:")
-    effective_plantation_work_speed = plantation_work_speed * num_workers
-    
+
     # For each crop, calculate the production rate (crops per second)
     crop_rates = {}
     for crop, count in plantation_assignment.items():
-        work_per_cycle = 3 * CROP_DATA[crop]["work_per_phase"]
-        work_time_per_plantation = work_per_cycle / effective_plantation_work_speed
-        growth_time = CROP_DATA[crop]["growth_sec"]
-        total_cycle_time = work_time_per_plantation + growth_time
-        
+        total_cycle_time = cycle_time(crop, effective_plantation_work_speed)
+
         # Production rate: crops per second = gathered_amount_per_cycle * count / total_cycle_time
         gathered_amount_per_cycle = 10 * (0.5 + (suitability_level) / 2)
         crops_per_second = gathered_amount_per_cycle * count / total_cycle_time
         crop_rates[crop] = crops_per_second
         print(f"  {crop} ({count}x): {crops_per_second:.4f} crops/sec (cycle: {total_cycle_time:.1f}s)")
-    
     # Calculate recipes per second (bottlenecked by the crop with lowest ratio coverage)
     recipes_per_second = min(
         crop_rates[crop] / selected_recipe[crop] 
