@@ -54,9 +54,15 @@ def work_time(crop: str, effective_work_speed: float) -> float:
     return 3 * CROP_DATA[crop]["work_per_phase"] / (effective_work_speed / 100)
 
 
-def cycle_time(crop: str, effective_work_speed: float) -> float:
-    """Seconds for one plantation to run planting -> watering -> growth -> gathering."""
-    return CROP_DATA[crop]["growth_sec"] + work_time(crop, effective_work_speed)
+def cycle_time(crop: str, effective_work_speed: float, congestion: float = 1.0) -> float:
+    """
+    Seconds for one plantation to run planting -> watering -> growth -> gathering.
+
+    The default assumes the plantation has the whole worker pool to itself, which
+    is the fastest a cycle can possibly go. Pass a congestion factor above 1 to
+    stretch the work phases by the amount the workers are shared out.
+    """
+    return CROP_DATA[crop]["growth_sec"] + congestion * work_time(crop, effective_work_speed)
 
 
 def crop_shares(ratio: Dict[str, int], effective_work_speed: float) -> Dict[str, float]:
@@ -72,6 +78,58 @@ def crop_shares(ratio: Dict[str, int], effective_work_speed: float) -> Dict[str,
     weights = {c: ratio[c] * cycle_time(c, effective_work_speed) for c in active}
     total = sum(weights.values())
     return {c: w / total for c, w in weights.items()}
+
+
+def worker_load(
+    assignment: Dict[str, int],
+    effective_work_speed: float,
+    congestion: float = 1.0,
+) -> float:
+    """
+    Fraction of the worker pool the given plantations demand.
+
+    A plantation needs the workers for work_time out of every cycle_time seconds
+    and is just growing the rest of the time, so it claims that fraction of the
+    pool. Summed over all plantations, 1.0 means the workers are exactly busy and
+    anything above means they cannot keep up.
+    """
+    return sum(
+        count
+        * work_time(crop, effective_work_speed)
+        / cycle_time(crop, effective_work_speed, congestion)
+        for crop, count in assignment.items()
+    )
+
+
+def congestion_factor(assignment: Dict[str, int], effective_work_speed: float) -> float:
+    """
+    Factor by which every work phase stretches because the workers are shared
+    across more plantations than they can serve at once.
+
+    Below full capacity the workers can reach each plantation the moment it needs
+    them, so the factor is 1. Past that they become the bottleneck: work queues
+    up, plantations sit finished-but-unharvested or planted-but-unwatered, and
+    cycles lengthen until demand drops back to what the workers can deliver.
+    This returns the smallest factor k >= 1 that satisfies
+
+        sum over plantations of work_time / (growth_sec + k * work_time) <= 1
+
+    Work is assumed to be shared evenly, so every crop stretches by the same k.
+    """
+    if worker_load(assignment, effective_work_speed) <= 1:
+        return 1.0
+
+    # Load falls monotonically towards 0 as k grows, so bisect for the crossing.
+    low, high = 1.0, 2.0
+    while worker_load(assignment, effective_work_speed, high) > 1:
+        high *= 2
+    for _ in range(60):
+        mid = (low + high) / 2
+        if worker_load(assignment, effective_work_speed, mid) > 1:
+            low = mid
+        else:
+            high = mid
+    return high
 
 
 def calculate_optimal_plantations(
@@ -283,16 +341,30 @@ if __name__ == "__main__":
     # Calculate expected recipes per second
     print("\nProduction analysis:")
 
+    # Plantations normally outnumber workers, so a plantation usually cannot have
+    # the whole pool the moment it needs work. Stretch the work phases by however
+    # much the workers are spread out before reading off any cycle times.
+    congestion = congestion_factor(plantation_assignment, effective_plantation_work_speed)
+    demanded = worker_load(plantation_assignment, effective_plantation_work_speed)
+    print(f"  Worker load: {min(demanded, 1.0):.0%} of {num_workers} worker(s)")
+    if congestion > 1:
+        print(
+            f"  Oversubscribed: {demanded:.0%} of capacity wanted, so every work phase"
+            f" takes {congestion:.2f}x longer than with the pool to itself."
+        )
+    print()
+
     # For each crop, calculate the production rate (crops per second)
     crop_rates = {}
     for crop, count in plantation_assignment.items():
-        total_cycle_time = cycle_time(crop, effective_plantation_work_speed)
+        total_cycle_time = cycle_time(crop, effective_plantation_work_speed, congestion)
 
         # Production rate: crops per second = gathered_amount_per_cycle * count / total_cycle_time
         gathered_amount_per_cycle = 10 * (0.5 + (suitability_level) / 2)
         crops_per_second = gathered_amount_per_cycle * count / total_cycle_time
         crop_rates[crop] = crops_per_second
         print(f"  {crop} ({count}x): {crops_per_second:.4f} crops/sec (cycle: {total_cycle_time:.1f}s)")
+
     # Calculate recipes per second (bottlenecked by the crop with lowest ratio coverage)
     recipes_per_second = min(
         crop_rates[crop] / selected_recipe[crop] 
