@@ -2,29 +2,32 @@ from typing import Dict, Tuple
 import argparse
 import math
 
-# Available recipes and their required crop ratios per bundle
+# Available recipes, each with the crops one bundle needs and the dish's listed
+# Gold Coin value, both from the item pages on paldb.cc. The listed value is what
+# buying the dish back would cost, not what selling it pays.
 RECIPES = {
     "minestrone": {
-        "Tomato": 3,
-        "Potato": 1,
-        "Carrot": 2,
-        "Onion": 2,
+        "gold": 890,
+        "crops": {
+            "Tomato": 3,
+            "Potato": 1,
+            "Carrot": 2,
+            "Onion": 2,
+        },
     },
     "salad": {
-        "Lettuce": 2,
-        "Tomato": 2,
+        "gold": 380,
+        "crops": {
+            "Lettuce": 2,
+            "Tomato": 2,
+        },
     },
     "baked_berry": {
-        "Berry": 1,
+        "gold": 60,
+        "crops": {
+            "Berry": 1,  # one Red Berry bakes into one Baked Berries
+        },
     },
-}
-
-# Gold Coin value of one finished dish, from the item pages on paldb.cc.
-# This is the listed value, which is what buying the dish back would cost.
-RECIPE_GOLD = {
-    "minestrone": 890,
-    "salad": 380,
-    "baked_berry": 60,  # one Red Berry bakes into one Baked Berries
 }
 
 # Merchants pay a tenth of the listed value when you sell to them.
@@ -327,30 +330,23 @@ if __name__ == "__main__":
         default="minestrone",
         help="Recipe to optimize for. Choices: %(choices)s. Defaults to %(default)s.",
     )
-    parser.add_argument(
-        "--sell-rate",
-        type=float,
-        default=MERCHANT_SELL_RATE,
-        help="Fraction of the listed Gold Coin value a merchant pays."
-        " Defaults to %(default)s. Raise it to account for the Noble and Fine Furs"
-        " passives, which increase what you are paid.",
-    )
     args = parser.parse_args()
     work_speed = args.work_speed
     suitability_level = args.suitability
     num_workers = args.workers
     selected_recipe = RECIPES[args.recipe]
+    crop_ratio = selected_recipe["crops"]
 
     # Calculate optimal number of plantations based on work speed, suitability level, and number of workers
     optimal_plantations, plantation_work_speed = calculate_optimal_plantations(
-        work_speed, suitability_level, num_workers, selected_recipe
+        work_speed, suitability_level, num_workers, crop_ratio
     )
-    
+
     effective_plantation_work_speed = plantation_work_speed * num_workers
 
     # Calculate the optimal assignment of plantations to crops
     plantation_assignment = optimal_assignment(
-        optimal_plantations, selected_recipe, effective_plantation_work_speed
+        optimal_plantations, crop_ratio, effective_plantation_work_speed
     )
 
     print(f"Input: recipe={args.recipe}, work_speed={work_speed}, suitability_level={suitability_level}, workers={num_workers}")
@@ -386,17 +382,16 @@ if __name__ == "__main__":
 
     # Calculate recipes per second (bottlenecked by the crop with lowest ratio coverage)
     recipes_per_second = min(
-        crop_rates[crop] / selected_recipe[crop] 
+        crop_rates[crop] / crop_ratio[crop]
         for crop in plantation_assignment.keys()
     )
-    
+
     print(f"\nExpected recipes per minute: {recipes_per_second * 60:.2f}")
 
     # Gold only counts the crops that actually combine into bundles; leftovers of
     # the non-bottleneck crops are ignored rather than sold off separately.
-    gold_per_recipe = RECIPE_GOLD[args.recipe] * args.sell_rate
+    gold_per_recipe = selected_recipe["gold"] * MERCHANT_SELL_RATE
     print(
         f"Expected gold per minute: {recipes_per_second * 60 * gold_per_recipe:,.0f}"
-        f" ({gold_per_recipe:,.1f} per {args.recipe} sold,"
-        f" {args.sell_rate:.0%} of its {RECIPE_GOLD[args.recipe]:,} listed value)"
+        f" ({gold_per_recipe:,.1f} per {args.recipe} sold)"
     )
