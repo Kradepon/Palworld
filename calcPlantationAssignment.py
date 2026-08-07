@@ -14,19 +14,21 @@ RECIPES = {
         "Lettuce": 2,
         "Tomato": 2,
     },
-    "berry": {
+    "baked_berry": {
         "Berry": 1,
     },
 }
 
-# Gold Coin value of one finished bundle, from the item pages on paldb.cc.
-# This is the listed value of the item, not what a given merchant hands over;
-# use --sell-rate to apply whatever fraction yours actually pays.
+# Gold Coin value of one finished dish, from the item pages on paldb.cc.
+# This is the listed value, which is what buying the dish back would cost.
 RECIPE_GOLD = {
     "minestrone": 890,
     "salad": 380,
-    "berry": 50,  # a single Red Berry, sold raw rather than cooked
+    "baked_berry": 60,  # one Red Berry bakes into one Baked Berries
 }
+
+# Merchants pay a tenth of the listed value when you sell to them.
+MERCHANT_SELL_RATE = 0.1
 
 # Crop characteristics: work per phase and growth time
 CROP_DATA = {
@@ -328,9 +330,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--sell-rate",
         type=float,
-        default=1.0,
-        help="Fraction of the listed Gold Coin value a merchant pays. Defaults to 1.0,"
-        " i.e. the gold figure is the listed value rather than a merchant payout.",
+        default=MERCHANT_SELL_RATE,
+        help="Fraction of the listed Gold Coin value a merchant pays."
+        " Defaults to %(default)s. Raise it to account for the Noble and Fine Furs"
+        " passives, which increase what you are paid.",
     )
     args = parser.parse_args()
     work_speed = args.work_speed
@@ -394,5 +397,6 @@ if __name__ == "__main__":
     gold_per_recipe = RECIPE_GOLD[args.recipe] * args.sell_rate
     print(
         f"Expected gold per minute: {recipes_per_second * 60 * gold_per_recipe:,.0f}"
-        f" ({gold_per_recipe:,.0f} per {args.recipe})"
+        f" ({gold_per_recipe:,.1f} per {args.recipe} sold,"
+        f" {args.sell_rate:.0%} of its {RECIPE_GOLD[args.recipe]:,} listed value)"
     )
