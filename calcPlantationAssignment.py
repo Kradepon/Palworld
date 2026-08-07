@@ -19,6 +19,15 @@ RECIPES = {
     },
 }
 
+# Gold Coin value of one finished bundle, from the item pages on paldb.cc.
+# This is the listed value of the item, not what a given merchant hands over;
+# use --sell-rate to apply whatever fraction yours actually pays.
+RECIPE_GOLD = {
+    "minestrone": 890,
+    "salad": 380,
+    "berry": 50,  # a single Red Berry, sold raw rather than cooked
+}
+
 # Crop characteristics: work per phase and growth time
 CROP_DATA = {
     "Berry": {"work_per_phase": 45, "growth_sec": 180},
@@ -316,6 +325,13 @@ if __name__ == "__main__":
         default="minestrone",
         help="Recipe to optimize for. Choices: %(choices)s. Defaults to %(default)s.",
     )
+    parser.add_argument(
+        "--sell-rate",
+        type=float,
+        default=1.0,
+        help="Fraction of the listed Gold Coin value a merchant pays. Defaults to 1.0,"
+        " i.e. the gold figure is the listed value rather than a merchant payout.",
+    )
     args = parser.parse_args()
     work_speed = args.work_speed
     suitability_level = args.suitability
@@ -349,7 +365,7 @@ if __name__ == "__main__":
     print(f"  Worker load: {min(demanded, 1.0):.0%} of {num_workers} worker(s)")
     if congestion > 1:
         print(
-            f"  Oversubscribed: {demanded:.0%} of capacity wanted, so every work phase"
+            f"  Oversubscribed: {demanded:.1%} of capacity wanted, so every work phase"
             f" takes {congestion:.2f}x longer than with the pool to itself."
         )
     print()
@@ -372,3 +388,11 @@ if __name__ == "__main__":
     )
     
     print(f"\nExpected recipes per minute: {recipes_per_second * 60:.2f}")
+
+    # Gold only counts the crops that actually combine into bundles; leftovers of
+    # the non-bottleneck crops are ignored rather than sold off separately.
+    gold_per_recipe = RECIPE_GOLD[args.recipe] * args.sell_rate
+    print(
+        f"Expected gold per minute: {recipes_per_second * 60 * gold_per_recipe:,.0f}"
+        f" ({gold_per_recipe:,.0f} per {args.recipe})"
+    )
