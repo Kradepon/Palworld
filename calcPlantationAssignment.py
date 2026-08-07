@@ -1,4 +1,4 @@
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 import argparse
 import math
 
@@ -32,6 +32,12 @@ RECIPES = {
 
 # Merchants pay a tenth of the listed value when you sell to them.
 MERCHANT_SELL_RATE = 0.1
+
+# Work phases stretch a little whenever the plantation count rounds up past what
+# the workers can serve, which is harmless: work is a thin slice of a cycle that
+# is mostly growth. Past this factor the plantations spend real time waiting and
+# the farm is genuinely short of workers.
+STARVED_CONGESTION = 1.3
 
 # Crop characteristics: work per phase and growth time
 CROP_DATA = {
@@ -140,6 +146,48 @@ def congestion_factor(assignment: Dict[str, int], effective_work_speed: float) -
     for _ in range(60):
         mid = (low + high) / 2
         if worker_load(assignment, effective_work_speed, mid) > 1:
+            low = mid
+        else:
+            high = mid
+    return high
+
+
+def work_speed_for_full_load(
+    assignment: Dict[str, int],
+    suitability_level: int,
+    num_workers: int,
+) -> Optional[float]:
+    """
+    Work speed stat at which the workers exactly keep up with these plantations.
+
+    Faster workers clear the same workload in less time, so the share of the pool
+    a plantation claims falls as work speed rises. That makes the load a strictly
+    decreasing function of work speed with a single crossing at 100%: below it the
+    plantations queue for a worker, above it the workers stand idle between jobs
+    and the farm has room for more plantations. Aiming at the crossing is what
+    makes a farm of this exact size fully utilized.
+
+    Returns None when no such speed exists, which happens with a single
+    plantation: it spends part of every cycle just growing, so it can never keep
+    a worker busy no matter how slowly that worker works.
+    """
+    base = WORK_SPEED_SUITABILITY_BASES[suitability_level] * num_workers
+
+    def load(work_speed: float) -> float:
+        return worker_load(assignment, base * work_speed / 100)
+
+    if sum(assignment.values()) < 2:
+        return None
+
+    # Slow enough, every plantation is permanently waiting and the load tends to
+    # the plantation count, so the crossing is bracketed from below by any small
+    # speed and from above by doubling until the workers get ahead.
+    low, high = 1e-6, 100.0
+    while load(high) > 1:
+        high *= 2
+    for _ in range(60):
+        mid = (low + high) / 2
+        if load(mid) > 1:
             low = mid
         else:
             high = mid
@@ -361,11 +409,35 @@ if __name__ == "__main__":
     # much the workers are spread out before reading off any cycle times.
     congestion = congestion_factor(plantation_assignment, effective_plantation_work_speed)
     demanded = worker_load(plantation_assignment, effective_plantation_work_speed)
-    print(f"  Worker load: {min(demanded, 1.0):.0%} of {num_workers} worker(s)")
-    if congestion > 1:
+    print(f"  Worker load: {demanded:.0%} of {num_workers} worker(s)")
+
+    if congestion >= STARVED_CONGESTION:
         print(
-            f"  Oversubscribed: {demanded:.1%} of capacity wanted, so every work phase"
-            f" takes {congestion:.2f}x longer than with the pool to itself."
+            f"  Workers are starved: work phases run {congestion:.2f}x slower than with the"
+            f" pool to itself. Add workers or raise suitability."
+        )
+    else:
+        print(
+            f"  At capacity: work phases run {congestion:.2f}x slower than on full utilization."
+        )
+
+    # The count has to be a whole number, so it rarely lands on exactly 100%. This
+    # is the work speed that would, which is reachable through food, passives,
+    # souls and base buffs without changing the farm.
+    ideal_work_speed = work_speed_for_full_load(
+        plantation_assignment, suitability_level, num_workers
+    )
+    if ideal_work_speed is not None and ideal_work_speed > work_speed:
+        print(
+            f"  Work speed {ideal_work_speed:.1f} would put these {optimal_plantations}"
+            f" plantations at exactly 100% (you have {work_speed:.0f})."
+        )
+    elif ideal_work_speed is not None:
+        # Undershooting means the workers are slightly too good for the farm. The
+        # answer is another plantation, never a slower Pal.
+        print(
+            f"  These {optimal_plantations} plantations only need work speed"
+            f" {ideal_work_speed:.1f} and you have {work_speed:.0f}."
         )
     print()
 
@@ -393,5 +465,5 @@ if __name__ == "__main__":
     gold_per_recipe = selected_recipe["gold"] * MERCHANT_SELL_RATE
     print(
         f"Expected gold per minute: {recipes_per_second * 60 * gold_per_recipe:,.0f}"
-        f" ({gold_per_recipe:,.1f} per {args.recipe} sold)"
+        f" ({gold_per_recipe:,.0f} per {args.recipe} sold)"
     )
